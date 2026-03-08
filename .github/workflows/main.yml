@@ -1,0 +1,84 @@
+name: MD11
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 9999999999
+
+    steps:
+      - name: Configure System (Dark Mode, No Password Policy, No Test Mode)
+        run: |
+          # 1. تفعيل الـ RDP وتعطيل الـ NLA
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+
+          # 2. السماح بالدخول بحسابات بدون كلمة سر (Blank Password Policy)
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Lsa' -Name "LimitBlankPasswordUse" -Value 0 -Force
+
+          # 3. تفعيل الـ Dark Mode للنسخة بالكامل
+          $ThemePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+          if (-not (Test-Path $ThemePath)) { New-Item -Path $ThemePath -Force }
+          Set-ItemProperty -Path $ThemePath -Name "AppsUseLightTheme" -Value 0 -Force
+          Set-ItemProperty -Path $ThemePath -Name "SystemUsesLightTheme" -Value 0 -Force
+
+          # 4. إزالة علامة الـ Test Mode من أسفل الشاشة
+          bcdedit /set testsigning off
+
+          # 5. إعدادات جدار الحماية
+          netsh advfirewall firewall delete rule name="MD11-Tailscale"
+          netsh advfirewall firewall add rule name="MD11-Tailscale" dir=in action=allow protocol=TCP localport=3389
+
+          # إعادة تشغيل خدمة الـ RDP لتطبيق التغييرات
+          Restart-Service -Name TermService -Force
+
+      - name: Create RDP User (MD11) without Password
+        run: |
+          # إنشاء المستخدم MD11 بدون كلمة سر
+          New-LocalUser -Name "MD11" -NoPassword -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "MD11"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "MD11"
+          
+          echo "RDP_CREDS=User: MD11 | Password: (None)" >> $env:GITHUB_ENV
+
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: Establish Tailscale Connection
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Maintain Connection
+        run: |
+          Write-Host "`n=== RDP ACCESS INFO ==="
+          Write-Host "IP Address: $env:TAILSCALE_IP"
+          Write-Host "Username: MD11"
+          Write-Host "Password: (Blank / No Password)"
+          Write-Host "========================`n"
+          
+          while ($true) {
+              Write-Host "[$(Get-Date)] RDP Session Running..."
+              Start-Sleep -Seconds 300
+          }
