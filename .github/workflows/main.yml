@@ -9,40 +9,41 @@ jobs:
     timeout-minutes: 9999999999
 
     steps:
-      - name: Configure System (Dark Mode, No Password Policy, No Test Mode)
+      - name: Configure System (Dark Mode, Test Mode Off)
         run: |
           # 1. تفعيل الـ RDP وتعطيل الـ NLA
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
 
-          # 2. السماح بالدخول بحسابات بدون كلمة سر (Blank Password Policy)
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Lsa' -Name "LimitBlankPasswordUse" -Value 0 -Force
-
-          # 3. تفعيل الـ Dark Mode للنسخة بالكامل
+          # 2. تفعيل الـ Dark Mode للنسخة بالكامل
           $ThemePath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize"
           if (-not (Test-Path $ThemePath)) { New-Item -Path $ThemePath -Force }
           Set-ItemProperty -Path $ThemePath -Name "AppsUseLightTheme" -Value 0 -Force
           Set-ItemProperty -Path $ThemePath -Name "SystemUsesLightTheme" -Value 0 -Force
 
-          # 4. إزالة علامة الـ Test Mode من أسفل الشاشة
+          # 3. إزالة علامة الـ Test Mode من أسفل الشاشة
           bcdedit /set testsigning off
 
-          # 5. إعدادات جدار الحماية
+          # 4. إعدادات جدار الحماية
           netsh advfirewall firewall delete rule name="MD11-Tailscale"
           netsh advfirewall firewall add rule name="MD11-Tailscale" dir=in action=allow protocol=TCP localport=3389
 
           # إعادة تشغيل خدمة الـ RDP لتطبيق التغييرات
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP User (MD11) without Password
+      - name: Create RDP User (MD11) with Fixed Password
         run: |
-          # إنشاء المستخدم MD11 بدون كلمة سر
-          New-LocalUser -Name "MD11" -NoPassword -AccountNeverExpires
+          # إعداد الباسورد الثابت
+          $password = "200488hd"
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          
+          # إنشاء المستخدم MD11
+          New-LocalUser -Name "MD11" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "MD11"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "MD11"
           
-          echo "RDP_CREDS=User: MD11 | Password: (None)" >> $env:GITHUB_ENV
+          echo "RDP_IP=$env:TAILSCALE_IP" >> $env:GITHUB_ENV
 
       - name: Install Tailscale
         run: |
@@ -75,7 +76,7 @@ jobs:
           Write-Host "`n=== RDP ACCESS INFO ==="
           Write-Host "IP Address: $env:TAILSCALE_IP"
           Write-Host "Username: MD11"
-          Write-Host "Password: (Blank / No Password)"
+          Write-Host "Password: 200488hd"
           Write-Host "========================`n"
           
           while ($true) {
